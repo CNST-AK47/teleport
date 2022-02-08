@@ -95,8 +95,6 @@ func SetTestTimeouts(t time.Duration) {
 // TeleInstance represents an in-memory instance of a teleport
 // process for testing
 type TeleInstance struct {
-	mu sync.Mutex
-
 	// Secrets holds the keys (pub, priv and derived cert) of i instance
 	Secrets InstanceSecrets
 
