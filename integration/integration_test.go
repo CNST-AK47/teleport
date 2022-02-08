@@ -1208,11 +1208,10 @@ func runDisconnectTest(t *testing.T, suite *integrationTestSuite, tc disconnectT
 		openSession := func() {
 			defer cancel()
 			cl, err := teleport.NewClient(t, ClientConfig{
-				Login:      username,
-				Cluster:    Site,
-				Host:       Host,
-				Port:       teleport.GetPortSSHInt(),
-				Regenerate: true,
+				Login:   username,
+				Cluster: Site,
+				Host:    Host,
+				Port:    teleport.GetPortSSHInt(),
 			})
 			require.NoError(t, err)
 			cl.Stdout = person

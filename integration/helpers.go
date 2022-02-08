@@ -686,20 +686,6 @@ func (i *TeleInstance) CreateEx(t *testing.T, trustedSecrets []*InstanceSecrets,
 		if err != nil {
 			return trace.Wrap(err)
 		}
-		// if user keys are not present, auto-generate keys:
-		if user.Key == nil || len(user.Key.Pub) == 0 {
-			priv, pub, _ := tconf.Keygen.GenerateKeyPair("")
-			user.Key = &client.Key{
-				Priv: priv,
-				Pub:  pub,
-			}
-		}
-		// sign user's keys:
-		ttl := 24 * time.Hour
-		user.Key.Cert, user.Key.TLSCert, err = auth.GenerateUserTestCerts(user.Key.Pub, teleUser.GetName(), ttl, constants.CertificateFormatStandard, "")
-		if err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -1081,6 +1067,31 @@ func (i *TeleInstance) AddUser(username string, mappings []string) *User {
 	return user
 }
 
+// GenerateCertificate will create a key pair and certificate for a user. Used
+// by tests to simulate login.
+func (i *TeleInstance) GenerateCertificate(user string) (*client.Key, error) {
+	privateKey, publicKey, err := i.Process.GetAuthServer().GenerateKeyPair("")
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	key := client.Key{
+		Priv: privateKey,
+		Pub:  publicKey,
+	}
+	key.Cert, key.TLSCert, err = i.Process.GetAuthServer().GenerateUserTestCerts(
+		key.Pub,
+		user,
+		24*time.Hour,
+		constants.CertificateFormatStandard,
+		"")
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return &key, nil
+}
+
 // Start will start the TeleInstance and then block until it is ready to
 // process requests based off the passed in configuration.
 func (i *TeleInstance) Start() error {
@@ -1154,8 +1165,6 @@ type ClientConfig struct {
 	Labels map[string]string
 	// Interactive launches with the terminal attached if true
 	Interactive bool
-	// Regenerate will regenerate certificates user certificates.
-	Regenerate bool
 }
 
 // NewClientWithCreds creates client with credentials
@@ -1232,44 +1241,26 @@ func (i *TeleInstance) NewUnauthenticatedClient(cfg ClientConfig) (tc *client.Te
 }
 
 // NewClient returns a fully configured and pre-authenticated client
-// (pre-authenticated with server CAs and signed session key)
+// (pre-authenticated with server CAs and signed session key).
 func (i *TeleInstance) NewClient(t *testing.T, cfg ClientConfig) (*client.TeleportClient, error) {
 	tc, err := i.NewUnauthenticatedClient(cfg)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
-	// configures the client authenticate using the keys from 'secrets':
-	user, ok := i.Secrets.Users[cfg.Login]
-	if !ok {
-		return nil, trace.BadParameter("unknown login %q", cfg.Login)
-	}
-	// Regenerate certificates if requested.
-	if cfg.Regenerate {
-		i.mu.Lock()
-
-		auth := i.Process.GetAuthServer()
-		user.Key.Cert, user.Key.TLSCert, err = auth.GenerateUserTestCerts(
-			user.Key.Pub,
-			user.Username,
-			24*time.Hour,
-			constants.CertificateFormatStandard,
-			"")
-		i.mu.Unlock()
-
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-	}
-	if user.Key == nil {
-		return nil, trace.BadParameter("user %q has no key", cfg.Login)
-	}
-	_, err = tc.AddKey(user.Key)
+	// Generate certificates for the user simulating login then add them into
+	// the agent so the client can use them later.
+	key, err := i.GenerateCertificate(cfg.Login)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	// tell the client to trust given CAs (from secrets). this is the
-	// equivalent of 'known hosts' in openssh
+	_, err = tc.AddKey(key)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	// Tell the client to trust given CAs (from secrets). This is the
+	// equivalent of "known hosts" in OpenSSH.
 	cas := i.Secrets.GetCAs(t)
 	for i := range cas {
 		err = tc.AddTrustedCA(cas[i])
